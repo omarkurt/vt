@@ -23,7 +23,6 @@ jobs:
   lint:
     name: "Lint"
     if: ${{ !endsWith(github.actor, '[bot]') }}
-    # ARM64 runner: faster and cheaper than amd64
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
@@ -66,53 +65,10 @@ jobs:
       - name: Run typos
         uses: crate-ci/typos@v1
 
-  release:
-    name: "🎉 Release (${{ matrix.os }})"
+  release-linux:
+    name: "🐧 Release Linux"
     needs: lint
     if: startsWith(github.ref, 'refs/tags/v')
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-24.04-arm
-            goos: linux windows
-          - os: macos-latest
-            goos: darwin
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Fetch all tags
-        run: git fetch --force --tags
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.25"
-          cache: true
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean --split
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOOS: ${{ matrix.goos }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ matrix.os }}
-          path: dist/
-          retention-days: 1
-
-  publish:
-    name: "📦 Publish"
-    needs: release
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
@@ -129,23 +85,95 @@ jobs:
           go-version: "1.25"
           cache: true
 
-      - name: Download Linux/Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-ubuntu-24.04-arm
-          path: dist/
+      - name: Build and upload Linux binaries
+        run: |
+          set -euo pipefail
+          VERSION=${GITHUB_REF_NAME#v}
 
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-macos-latest
-          path: dist/
+          for ARCH in amd64 386 arm arm64; do
+            GOOS=linux GOARCH=$ARCH CGO_ENABLED=0 go build \
+              -ldflags="-s -w" -o vt ./cmd/vt/main.go
+            zip "vt_${VERSION}_linux_${ARCH}.zip" vt
+            rm vt
+          done
 
-      - name: Merge and publish
-        uses: goreleaser/goreleaser-action@v6
+          shasum -a 256 vt_${VERSION}_linux_*.zip > "vt_${VERSION}_linux_checksums.txt"
+
+          gh release create "${GITHUB_REF_NAME}" \
+            vt_${VERSION}_linux_*.zip \
+            "vt_${VERSION}_linux_checksums.txt" \
+            --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-windows:
+    name: "🪟 Release Windows"
+    needs: release-linux
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: continue --merge
+          go-version: "1.25"
+          cache: true
+
+      - name: Build and upload Windows binaries
+        run: |
+          set -euo pipefail
+          VERSION=${GITHUB_REF_NAME#v}
+
+          for ARCH in amd64 386 arm64; do
+            GOOS=windows GOARCH=$ARCH CGO_ENABLED=0 go build \
+              -ldflags="-s -w" -o vt.exe ./cmd/vt/main.go
+            zip "vt_${VERSION}_windows_${ARCH}.zip" vt.exe
+            rm vt.exe
+          done
+
+          shasum -a 256 vt_${VERSION}_windows_*.zip > "vt_${VERSION}_windows_checksums.txt"
+
+          gh release upload "${GITHUB_REF_NAME}" \
+            vt_${VERSION}_windows_*.zip \
+            "vt_${VERSION}_windows_checksums.txt" \
+            --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-darwin:
+    name: "🍎 Release macOS"
+    needs: release-linux
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Build and upload macOS binaries
+        run: |
+          set -euo pipefail
+          VERSION=${GITHUB_REF_NAME#v}
+
+          for ARCH in amd64 arm64; do
+            GOOS=darwin GOARCH=$ARCH CGO_ENABLED=0 go build \
+              -ldflags="-s -w" -o vt ./cmd/vt/main.go
+            zip "vt_${VERSION}_macOS_${ARCH}.zip" vt
+            rm vt
+          done
+
+          shasum -a 256 vt_${VERSION}_macOS_*.zip > "vt_${VERSION}_macOS_checksums.txt"
+
+          gh release upload "${GITHUB_REF_NAME}" \
+            vt_${VERSION}_macOS_*.zip \
+            "vt_${VERSION}_macOS_checksums.txt" \
+            --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
