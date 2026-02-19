@@ -12,6 +12,13 @@ linters:
     - errcheck
     - govet
 
+  exclusions:
+    rules:
+      - linters:
+          - revive
+        path: pkg/template/
+        text: "var-naming"
+
   settings:
     errcheck:
       check-type-assertions: true

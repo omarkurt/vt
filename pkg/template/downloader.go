@@ -1,4 +1,4 @@
-package template //nolint:revive // var-naming: package name is intentional despite stdlib conflict
+package template
 
 import (
 	"errors"
